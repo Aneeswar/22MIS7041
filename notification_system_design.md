@@ -244,4 +244,20 @@ def notification_worker(task):
         else:
             move_to_dead_letter_queue(task)
 ```
+
+## Stage 6: Priority Inbox Engine
+
+### 6.1 Streaming Algorithmic Approach
+To maintain a rolling 'Top N' (e.g., Top 10) most important unread notifications on the fly, the system utilizes a **Max-Heap (Priority Queue)** approach.
+
+**Strategy:**
+1.  **Ranking Weight:** Each notification is assigned a numeric priority weight based on its `Type`:
+    *   `Placement`: 300
+    *   `Result`: 200
+    *   `Event`: 100
+2.  **Comparator Rule:**
+    *   **Primary:** Weight (Placement > Result > Event).
+    *   **Secondary Tie-Breaker:** If weights are equal, the one with the more recent `Timestamp` is ranked higher.
+3.  **Data Structure:** A **Priority Queue** is used to store incoming streams. In a real-time streaming context (like a WebSocket consumer), we can maintain a local buffer of the latest notifications and use this comparator to extract the "Top N" in $O(k \log n)$ time, where $k$ is the desired output size (10).
+4.  **Scaling Efficiency:** This allows the UI to stay locked to the most critical information even during "high-burst" periods (like placement season) without overwhelming the user's viewport with low-priority items.
     ```
