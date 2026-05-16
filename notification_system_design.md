@@ -198,4 +198,50 @@ Aggressive database hits on every page load can be mitigated by introducing a **
 | **Persistence Risk** | **Low**: Redis provides snapshotting; cache can be rebuilt from the DB. | **Critical**: If the gateway node resets, active unread session info is lost (must re-sync from DB). |
 
 **Architectural Recommendation:** Use **Pattern A (Redis)** for overall system resilience and consistent performance across both web and mobile platforms.
+
+## Stage 5: Asynchronous Redesign & Resiliency
+
+### 5.1 Synchronous Bottleneck Diagnostics
+The previous sequential loop implementation (`notify_all`) suffers from critical architectural flaws:
+*   **Sequential Latency:** Processing 50,000 students linearly means the last student might receive an "Instant" notification hours after the first one, especially if the Email API has high latency.
+*   **Single Point of Failure:** If the `send_email` dependency timeouts or crashes at student #200, the loop breaks. Students #201-#50,000 never receive their notifications, and the database remains inconsistent.
+*   **Blocking I/O:** The server thread is held hostage waiting for external REST calls, preventing it from serving other concurrent users.
+
+### 5.2 System Decoupling: Atomicity vs. Eventual Consistency
+Database persistence and external dispatches should **not** execute within the same atomic transaction. 
+*   **Eventual Consistency** is required here. We should ensure the notification is saved to our "Source of Truth" (DB) first, then use an outbox pattern or event emitter to trigger delivery asynchronously.
+*   This prevents a slow Email API from rolling back a successful database record or causing a timeout.
+
+### 5.3 Resilient Event-Driven Redesign
+The system is redesigned to use a **Message Broker (e.g., RabbitMQ or Kafka)** to decouple ingestion from delivery.
+
+**Producer (Core Service):**
+```python
+def publish_notification(student_ids, category, message):
+    # 1. Batch Insert into DB (Primary Persistence)
+    db.batch_insert(student_ids, category, message)
+    
+    # 2. Fire and Forget to Message Queue
+    for sid in student_ids:
+        queue.push("dispatch_task", {
+            "student_id": sid,
+            "category": category,
+            "message": message,
+            "metadata": {"retry": 0}
+        })
+```
+
+**Consumer (Worker Service):**
+```python
+def notification_worker(task):
+    try:
+        # Independent, parallel execution
+        push_to_app(task.sid, task.message)
+        send_email(task.sid, task.message)
+    except DeliveryError:
+        if task.retry < 3:
+            queue.retry_with_backoff(task)
+        else:
+            move_to_dead_letter_queue(task)
+```
     ```
