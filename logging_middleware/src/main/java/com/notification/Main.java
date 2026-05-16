@@ -1,5 +1,6 @@
 package com.notification;
 
+import com.notification.service.NotificationService;
 import com.notification.utils.Logger;
 
 public class Main {
@@ -9,6 +10,17 @@ public class Main {
         // Example Logs
         Logger.log("backend", "info", "utils", "Logger system initialized successfully.");
         
+        NotificationService service = new NotificationService();
+        
+        // Success case
+        service.sendNotification("user_123", "Hello World!");
+        
+        // Error case (invalid input)
+        service.sendNotification("user_456", "");
+        
+        // Warning case
+        service.sendNotification(null, "Test null user");
+
         try {
             // Simulating a process
             performDatabaseOperation();
@@ -19,7 +31,7 @@ public class Main {
         Logger.log("backend", "fatal", "db", "Critical database connection failure.");
         
         // Wait a bit for async calls to finish before main thread exits
-        try { Thread.sleep(2000); } catch (InterruptedException e) {}
+        try { Thread.sleep(3000); } catch (InterruptedException e) {}
         System.out.println("Application finished.");
     }
 
