@@ -181,4 +181,21 @@ WHERE category = 'Placement'
   AND created_at >= (CURRENT_DATE - INTERVAL '7 days')
 ORDER BY created_at DESC;
 ```
+
+## Stage 4: Performance Enhancement & Architectural Trade-offs
+
+### 4.1 Mitigation of Database Overwhelm
+Aggressive database hits on every page load can be mitigated by introducing a **Caching Layer** and **Read-Optimized Access Patterns**. Instead of querying the multi-million row `notifications` table for basic status checks (like unread counts), we transition to a data-on-demand model using memory-resident stores.
+
+### 4.2 Architectural Trade-offs: Side-by-Side Analysis
+
+| Feature | Pattern A: Distributed Read-Through Caching (Redis) | Pattern B: Stateful Gateway (WS Session Cache) |
+| :--- | :--- | :--- |
+| **Concept** | Store the most recent 50 notifications per student in an in-memory Redis Cluster. | Maintain unread notification state in the local memory of the WebSocket server for active sessions. |
+| **Performance Gain** | **Extreme**: Sub-millisecond latency; reduces DB read load by >90%. | **Optimal for Real-time**: Zero-latency retrieval once the connection is established. |
+| **Cache Invalidation** | **Complex**: Requires strict "Write-Through" or "Eviction" logic on every status change. | **Direct**: State is naturally invalidated as soon as the student disconnects or marks as read. |
+| **State Sync Complexity** | **Moderate**: Cache remains consistent across all app nodes via Redis protocol. | **High**: Requires "Sticky Sessions" or a backplane to sync if a student has multiple tabs open. |
+| **Persistence Risk** | **Low**: Redis provides snapshotting; cache can be rebuilt from the DB. | **Critical**: If the gateway node resets, active unread session info is lost (must re-sync from DB). |
+
+**Architectural Recommendation:** Use **Pattern A (Redis)** for overall system resilience and consistent performance across both web and mobile platforms.
     ```
