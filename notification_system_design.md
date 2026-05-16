@@ -75,4 +75,73 @@ To ensure immediate delivery, the platform utilizes **WebSockets (WS)** for bidi
         "timestamp": "2024-05-16T10:05:00Z"
       }
     }
+
+## Stage 2: Storage Strategy, Scaling, and Queries
+
+### 2.1 Storage Strategy
+The system utilizes **PostgreSQL (RDBMS)** as the primary persistent store.
+
+**Justification:**
+*   **ACID Compliance:** Ensures consistent notification delivery and 'read' state across student devices.
+*   **Relational Integrity:** Facilitates rigid foreign key relationships between Students and Notifications.
+*   **Performance:** Advanced indexing capabilities (GIN, Partial indexes) and JSONB support for future metadata flexibility.
+
+#### Database Schema Definition (DDL)
+```sql
+CREATE TYPE notification_category AS ENUM ('Placement', 'Event', 'Result');
+
+CREATE TABLE students (
+    student_id SERIAL PRIMARY KEY,
+    email VARCHAR(255) UNIQUE NOT NULL,
+    full_name VARCHAR(100)
+);
+
+CREATE TABLE notifications (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    student_id INT NOT NULL REFERENCES students(student_id),
+    category notification_category NOT NULL,
+    message TEXT NOT NULL,
+    is_read BOOLEAN DEFAULT FALSE,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+```
+
+### 2.2 High-Volume Scale Bottlenecks
+With 50,000 students and potentially millions of notifications per term, performance risks include:
+*   **Index Bloat:** Frequent updates to `is_read` create "dead tuples" (MVCC), causing index fragmentation and slower lookups.
+*   **Buffer Pool pressure:** Large indexes exceed RAM, leading to disk-thrashing for common reads.
+
+**Engineering Mitigations:**
+*   **Declarative Partitioning:** Partition the `notifications` table by `created_at` (Range) or `student_id` (Hash) to localize data scanning.
+*   **Index Boundaries:** Utilize **Partial Indexes** (e.g., `CREATE INDEX idx_unread ON notifications (student_id) WHERE is_read = false`) to significantly reduce index size and scan time for active feeds.
+
+### 2.3 Database Queries
+These queries back the REST API endpoints established in Stage 1.
+
+#### A. Fetch Recent Notifications (Paginated)
+```sql
+SELECT id, category, message, is_read, created_at 
+FROM notifications 
+WHERE student_id = :student_id 
+ORDER BY created_at DESC 
+LIMIT :limit OFFSET :offset;
+```
+
+#### B. Filter Unread Notifications by Category
+```sql
+SELECT id, message, created_at 
+FROM notifications 
+WHERE student_id = :student_id 
+  AND category = :category 
+  AND is_read = FALSE
+ORDER BY created_at DESC;
+```
+
+#### C. Mark Record as Read
+```sql
+UPDATE notifications 
+SET is_read = TRUE 
+WHERE id = :notification_id 
+  AND student_id = :student_id;
+```
     ```
