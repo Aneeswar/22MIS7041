@@ -144,4 +144,41 @@ SET is_read = TRUE
 WHERE id = :notification_id 
   AND student_id = :student_id;
 ```
+
+## Stage 3: Production Query Analysis & Indexing Strategy
+
+### 3.1 Production Query Analysis
+**Target Query:** `SELECT * FROM notifications WHERE studentID = 1042 AND isRead = false ORDER BY createdAt DESC;`
+
+*   **Accuracy:** The query is functionally accurate for retrieving unread notifications for a specific student.
+*   **Performance Diagnostics:**
+    *   **Full Row Scanning:** Without a composite index, the database engine likely performs an index scan on `studentID`, then a manual filter for `isRead`, and finally a memory-intensive `Sort` for `createdAt`.
+    *   **I/O Latency:** Under a volume of 5 million notifications, the engine must pull non-contiguous data pages from disk into memory, causing a "Random I/O" bottleneck.
+    *   **Scale Behavior:** As the `notifications` table grows, the "cost" of the sort operation increases logarithmically, leading to noticeable UI lag for students with high notification counts.
+
+### 3.2 Indexing Strategy Critique
+**Addressing the "Index Every Column" Suggestion:**
+While well-intentioned, indexing every column is detrimental in production environments due to:
+*   **Write-Amplification:** Each `INSERT` or `UPDATE` (like marking a message as read) incurs the overhead of updating every single index, doubling or tripling ingestion latency.
+*   **Storage Overhead:** In a 5M row dataset, indexes can easily exceed the size of the raw table, leading to increased infrastructure costs.
+*   **Optimizer Overhead:** A surplus of indexes can confuse the Query Optimizer, potentially leading it to choose a suboptimal execution plan for complex queries.
+
+### 3.3 Remediation & Time-Bounded Query
+
+#### Optimized Composite Index
+To eliminate the Sort operation and filter efficiently, we apply a composite index following the `Equality -> Sort` pattern:
+```sql
+CREATE INDEX idx_student_unread_recent 
+ON notifications (student_id, is_read, created_at DESC);
+```
+
+#### Optimized Time-Bounded Query
+Finding students who received a "Placement" notification within the trailing 7 days:
+```sql
+SELECT student_id, message, created_at 
+FROM notifications 
+WHERE category = 'Placement' 
+  AND created_at >= (CURRENT_DATE - INTERVAL '7 days')
+ORDER BY created_at DESC;
+```
     ```
